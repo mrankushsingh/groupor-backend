@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.cache import build_cache
 from app.config import get_settings
-from app.db import database_host_for_logs, init_db_with_retries
+from app.db import database_host_for_logs, engine_error, init_db_with_retries
 from app.routers import api, pages
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -21,22 +21,24 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Bind the HTTP server immediately so Railway /healthz can pass.
-
-    Postgres schema sync runs in the background with retries (SSL / cold start).
-    """
-    if os.getenv("RAILWAY_ENVIRONMENT") and "localhost" in settings.async_database_url:
+    """Bind HTTP immediately; Postgres init must never block Railway healthchecks."""
+    logger.info(
+        "Booting %s on PORT=%s DB=%s",
+        settings.site_name,
+        os.getenv("PORT", "8000"),
+        database_host_for_logs(),
+    )
+    if os.getenv("RAILWAY_ENVIRONMENT") and "localhost" in (settings.async_database_url or ""):
         logger.error(
             "DATABASE_URL still points at localhost on Railway. "
-            "Link PostgreSQL and set DATABASE_URL to the plugin URL."
+            "Link PostgreSQL via Variable Reference."
         )
 
     app.state.db_ready = False
-    app.state.db_error: str | None = None
+    app.state.db_error = None
 
     async def _boot_db() -> None:
         try:
-            logger.info("Starting %s — DB target %s", settings.site_name, database_host_for_logs())
             await init_db_with_retries()
             app.state.db_ready = True
             app.state.db_error = None
@@ -46,14 +48,13 @@ async def lifespan(app: FastAPI):
             logger.exception("Postgres init failed permanently: %s", exc)
 
     task = asyncio.create_task(_boot_db())
+    # Yield immediately so uvicorn accepts /healthz while DB connects.
+    yield
+    task.cancel()
     try:
-        yield
-    finally:
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 def create_app() -> FastAPI:
@@ -76,27 +77,28 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # Register health BEFORE routers so a router import bug can't hide liveness.
+    @app.get("/healthz")
+    async def healthz():
+        ready = bool(getattr(app.state, "db_ready", False))
+        payload = {
+            "ok": True,
+            "db_ready": ready,
+            "db_host": database_host_for_logs(),
+            "port": os.getenv("PORT", "8000"),
+            "cache": "memory" if not settings.redis_url else "redis-ready",
+        }
+        err = getattr(app.state, "db_error", None) or engine_error
+        if not ready and err:
+            payload["db_error"] = str(err)[:500]
+        return payload
+
     static_dir = Path(__file__).resolve().parent / "static"
     static_dir.mkdir(exist_ok=True)
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     app.include_router(api.router)
     app.include_router(pages.router)
-
-    @app.get("/healthz")
-    async def healthz():
-        # Liveness for Railway — must not wait on Postgres.
-        ready = bool(getattr(app.state, "db_ready", False))
-        payload = {
-            "ok": True,
-            "db_ready": ready,
-            "db_host": database_host_for_logs(),
-            "cache": "memory" if not settings.redis_url else "redis-ready",
-        }
-        err = getattr(app.state, "db_error", None)
-        if not ready and err:
-            payload["db_error"] = str(err)[:500]
-        return payload
 
     return app
 
