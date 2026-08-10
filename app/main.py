@@ -1,3 +1,6 @@
+import asyncio
+import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -7,16 +10,50 @@ from fastapi.staticfiles import StaticFiles
 
 from app.cache import build_cache
 from app.config import get_settings
-from app.db import init_db
+from app.db import database_host_for_logs, init_db_with_retries
 from app.routers import api, pages
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("groupor")
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
-    yield
+    """Bind the HTTP server immediately so Railway /healthz can pass.
+
+    Postgres schema sync runs in the background with retries (SSL / cold start).
+    """
+    if os.getenv("RAILWAY_ENVIRONMENT") and "localhost" in settings.async_database_url:
+        logger.error(
+            "DATABASE_URL still points at localhost on Railway. "
+            "Link PostgreSQL and set DATABASE_URL to the plugin URL."
+        )
+
+    app.state.db_ready = False
+    app.state.db_error: str | None = None
+
+    async def _boot_db() -> None:
+        try:
+            logger.info("Starting %s — DB target %s", settings.site_name, database_host_for_logs())
+            await init_db_with_retries()
+            app.state.db_ready = True
+            app.state.db_error = None
+        except Exception as exc:  # noqa: BLE001
+            app.state.db_ready = False
+            app.state.db_error = str(exc)
+            logger.exception("Postgres init failed permanently: %s", exc)
+
+    task = asyncio.create_task(_boot_db())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -28,6 +65,8 @@ def create_app() -> FastAPI:
     )
     app.state.cache = build_cache(settings.redis_url)
     app.state.settings = settings
+    app.state.db_ready = False
+    app.state.db_error = None
 
     app.add_middleware(
         CORSMiddleware,
@@ -46,7 +85,12 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz")
     async def healthz():
-        return {"ok": True, "cache": "memory" if not settings.redis_url else "redis-ready"}
+        # Liveness for Railway — must not wait on Postgres.
+        return {
+            "ok": True,
+            "db_ready": bool(getattr(app.state, "db_ready", False)),
+            "cache": "memory" if not settings.redis_url else "redis-ready",
+        }
 
     return app
 

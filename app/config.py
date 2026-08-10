@@ -1,16 +1,49 @@
 from functools import lru_cache
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def normalize_database_url(url: str) -> str:
-    """Railway/Heroku give postgres:// — SQLAlchemy async needs postgresql+asyncpg://."""
+    """Railway/Heroku give postgres:// — SQLAlchemy async needs postgresql+asyncpg://.
+
+    Also maps libpq sslmode=require → asyncpg ssl=require.
+    """
     value = (url or "").strip()
+    if not value:
+        return value
+
     if value.startswith("postgres://"):
         value = "postgresql://" + value[len("postgres://") :]
     if value.startswith("postgresql://") and "+asyncpg" not in value:
         value = "postgresql+asyncpg://" + value[len("postgresql://") :]
+
+    parsed = urlparse(value)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    sslmode = query.pop("sslmode", None)
+    if sslmode and "ssl" not in query:
+        # asyncpg accepts ssl=true/require; ignore prefer/disable noise.
+        if sslmode.lower() in {"require", "verify-ca", "verify-full", "true", "1"}:
+            query["ssl"] = "require"
+        elif sslmode.lower() in {"disable", "allow", "prefer", "false", "0"}:
+            pass
+        else:
+            query["ssl"] = sslmode
+    value = urlunparse(parsed._replace(query=urlencode(query)))
     return value
+
+
+def database_needs_ssl(url: str) -> bool:
+    parsed = urlparse(url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    ssl = (query.get("ssl") or "").lower()
+    host = (parsed.hostname or "").lower()
+    if ssl in {"require", "true", "1"}:
+        return True
+    # Railway public Postgres hosts typically need TLS.
+    if host.endswith(".rlwy.net") or host.endswith(".railway.app"):
+        return True
+    return False
 
 
 class Settings(BaseSettings):
