@@ -1,15 +1,21 @@
 from functools import lru_cache
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# asyncpg / SQLAlchemy do not understand every libpq query flag Railway may add.
+_DROP_QUERY_KEYS = {
+    "sslmode",
+    "channel_binding",
+    "gssencmode",
+    "target_session_attrs",
+}
 
 
 def normalize_database_url(url: str) -> str:
-    """Railway/Heroku give postgres:// — SQLAlchemy async needs postgresql+asyncpg://.
-
-    Also maps libpq sslmode=require → asyncpg ssl=require.
-    """
-    value = (url or "").strip()
+    """Railway/Heroku give postgres:// — SQLAlchemy async needs postgresql+asyncpg://."""
+    value = (url or "").strip().strip('"').strip("'")
     if not value:
         return value
 
@@ -20,17 +26,16 @@ def normalize_database_url(url: str) -> str:
 
     parsed = urlparse(value)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    sslmode = query.pop("sslmode", None)
-    if sslmode and "ssl" not in query:
-        # asyncpg accepts ssl=true/require; ignore prefer/disable noise.
-        if sslmode.lower() in {"require", "verify-ca", "verify-full", "true", "1"}:
-            query["ssl"] = "require"
-        elif sslmode.lower() in {"disable", "allow", "prefer", "false", "0"}:
-            pass
-        else:
-            query["ssl"] = sslmode
-    value = urlunparse(parsed._replace(query=urlencode(query)))
-    return value
+    sslmode = (query.get("sslmode") or "").lower()
+    for key in list(query):
+        if key.lower() in _DROP_QUERY_KEYS or key.lower() == "ssl":
+            query.pop(key, None)
+
+    # Keep a simple marker only for our SSL detector; stripped again before connect.
+    if sslmode in {"require", "verify-ca", "verify-full", "true", "1"}:
+        query["ssl"] = "require"
+
+    return urlunparse(parsed._replace(query=urlencode(query)))
 
 
 def database_needs_ssl(url: str) -> bool:
@@ -38,10 +43,12 @@ def database_needs_ssl(url: str) -> bool:
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     ssl = (query.get("ssl") or "").lower()
     host = (parsed.hostname or "").lower()
+    if host.endswith(".railway.internal") or host in {"localhost", "127.0.0.1"}:
+        return False
     if ssl in {"require", "true", "1"}:
         return True
-    # Railway public Postgres hosts typically need TLS.
-    if host.endswith(".rlwy.net") or host.endswith(".railway.app"):
+    # Railway public TCP proxy hosts need TLS.
+    if host.endswith(".rlwy.net") or host.endswith(".proxy.rlwy.net") or host.endswith(".railway.app"):
         return True
     return False
 
@@ -54,9 +61,7 @@ class Settings(BaseSettings):
     site_name: str = "Groupor"
     session_secret: str = "dev-only-change-me"
     page_size: int = 10
-    # Comma-separated browser origins allowed to call /api/* (Vercel frontend).
     cors_origins: str = "http://localhost:8080,http://localhost:8081,http://localhost:3000"
-    # Optional — leave empty for now; wire later without changing call sites.
     redis_url: str = ""
 
     @property
@@ -70,4 +75,15 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
+    import os
+
+    # On Railway, private networking is more reliable than the public proxy.
+    preferred = (
+        os.getenv("DATABASE_PRIVATE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("POSTGRES_URL")
+        or os.getenv("POSTGRESQL_URL")
+    )
+    if preferred:
+        return Settings(database_url=preferred)
     return Settings()

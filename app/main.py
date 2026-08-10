@@ -86,11 +86,17 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         # Liveness for Railway — must not wait on Postgres.
-        return {
+        ready = bool(getattr(app.state, "db_ready", False))
+        payload = {
             "ok": True,
-            "db_ready": bool(getattr(app.state, "db_ready", False)),
+            "db_ready": ready,
+            "db_host": database_host_for_logs(),
             "cache": "memory" if not settings.redis_url else "redis-ready",
         }
+        err = getattr(app.state, "db_error", None)
+        if not ready and err:
+            payload["db_error"] = str(err)[:500]
+        return payload
 
     return app
 
