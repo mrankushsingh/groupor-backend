@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Add Your WhatsApp Group</h1>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+<form class="add-form" method="post" action="/group/addgroup">
+  <input required type="url" name="link" maxlength="300" placeholder="Enter WhatsApp Group Invite Link..." />
+  <input type="text" name="name" maxlength="80" placeholder="Group name (optional — can be filled later)" />
+  <select required name="category">
+    <option value="">Select Group Category</option>
+    {% for c in categories %}
+      <option value="{{ c.slug }}">{{ c.name }}</option>
+    {% endfor %}
+  </select>
+  <select required name="country">
+    <option value="">Select Group Country</option>
+    {% for country in countries %}
+      <option value="{{ country }}">{{ country }}</option>
+    {% endfor %}
+  </select>
+  <select name="language">
+    <option value="">Select Group Language</option>
+    {% for language in languages %}
+      <option value="{{ language }}">{{ language }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="tags" placeholder="Enter Tags by Comma (,) Separated (Optional)" />
+  <textarea name="description" rows="6" maxlength="6000" placeholder="Enter Group Information and Rules (Optional)"></textarea>
+  <p class="note">Limit: each IP can upload 5 groups every 24 hours.</p>
+  <button type="submit">Submit</button>
+</form>
+{% endblock %}

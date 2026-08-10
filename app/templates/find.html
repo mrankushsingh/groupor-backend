@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar, group_card, pager %}
+
+{% block content %}
+<h1>Find WhatsApp Groups</h1>
+<p class="sub">
+  {% if filters.category or filters.country or filters.language or filters.q %}
+    {{ category_name(filters.category) if filters.category else '' }}
+    {% if filters.country %} · {{ filters.country }}{% endif %}
+    {% if filters.language %} · {{ filters.language }}{% endif %}
+    {% if filters.q %} · “{{ filters.q }}”{% endif %}
+  {% else %}
+    Choose a category, country, or language, then find groups.
+  {% endif %}
+</p>
+
+{{ filter_bar(filters) }}
+
+<section class="listing">
+  <p class="count">{{ pager.total }} group{% if pager.total != 1 %}s{% endif %} found</p>
+  {% for group in groups %}
+    {{ group_card(group) }}
+  {% else %}
+    <p class="empty">No groups found. Try different filters.</p>
+  {% endfor %}
+  {{ pager(pager, '/group/find', query_string) }}
+</section>
+{% endblock %}

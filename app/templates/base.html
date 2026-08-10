@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ seo.title }}</title>
+  <meta name="description" content="{{ seo.description }}" />
+  {% if seo.robots %}<meta name="robots" content="{{ seo.robots }}" />{% endif %}
+  <link rel="canonical" href="{{ seo.canonical }}" />
+  <meta property="og:title" content="{{ seo.og_title or seo.title }}" />
+  <meta property="og:description" content="{{ seo.og_description or seo.description }}" />
+  <meta property="og:url" content="{{ seo.og_url or seo.canonical }}" />
+  <meta property="og:type" content="{{ seo.og_type or 'website' }}" />
+  {% if seo.og_image %}<meta property="og:image" content="{{ seo.og_image }}" />{% endif %}
+  <meta name="twitter:card" content="summary_large_image" />
+  {% if jsonld %}<script type="application/ld+json">{{ jsonld | safe }}</script>{% endif %}
+  <link rel="stylesheet" href="/static/site.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-row">
+      <a class="brand" href="/">{{ site_name }}</a>
+      <form class="header-search" action="/group/find" method="get" role="search">
+        <input type="search" name="q" placeholder="Type Keywords to Search" value="{{ filters.q if filters is defined and filters.q else '' }}" aria-label="Search groups" />
+        <button type="submit" aria-label="Search">Search</button>
+      </form>
+      <nav class="header-nav">
+        <a href="/">Home</a>
+        <a href="/group/addgroup">Add Group</a>
+        <a href="/group/find">Find</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wrap">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>© {{ site_name }} — Find. Connect. Grow together.</p>
+      <p><a href="/sitemap.xml">Sitemap</a></p>
+    </div>
+  </footer>
+</body>
+</html>

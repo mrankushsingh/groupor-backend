@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% from "macros.html" import filter_bar, group_card, pager %}
+
+{% block content %}
+<section class="hero">
+  <a class="cta" href="/group/addgroup">+ Add Whatsapp Group</a>
+  <h1>Find WhatsApp Groups by Category, Country and Language</h1>
+  <p>{{ site_name }} helps you discover public WhatsApp communities. Browse by topic, location or language.</p>
+</section>
+
+{{ filter_bar(filters) }}
+
+<section class="listing">
+  {% for group in groups %}
+    {{ group_card(group) }}
+  {% else %}
+    <p class="empty">No groups yet. Be the first to <a href="/group/addgroup">add a group</a>.</p>
+  {% endfor %}
+  {{ pager(pager, '/', '') }}
+</section>
+{% endblock %}

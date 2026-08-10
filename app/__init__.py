@@ -1,0 +1,1 @@
+# FastAPI SSR application package

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "macros.html" import group_card %}
+
+{% block content %}
+<article class="group-detail">
+  {% if group.image %}
+    <img class="detail-avatar" src="{{ group.image }}" alt="{{ group.name }} WhatsApp group photo" width="120" height="120" />
+  {% else %}
+    <div class="detail-avatar fallback" aria-hidden="true">WA</div>
+  {% endif %}
+
+  <h1>{{ group.name }}</h1>
+
+  <p class="meta">
+    <span>{{ category_name(group.category) }}</span>
+    {% if group.country %}<span>{{ group.country }}</span>{% endif %}
+    {% if group.language %}<span>{{ group.language }}</span>{% endif %}
+    <span>{{ group.created_at.strftime('%Y-%m-%d %H:%M:%S') if group.created_at else '' }}</span>
+  </p>
+
+  {% if group.description %}
+    <div class="desc-box">{{ group.description }}</div>
+  {% endif %}
+
+  {% if group.tags %}
+    <ul class="tags">
+      {% for tag in group.tags %}
+        <li>{{ tag }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if reported %}
+    <p class="reported">This group is Reported for review...</p>
+  {% else %}
+    <div class="detail-actions">
+      <a class="cta" href="{{ group.link }}" rel="noopener noreferrer nofollow" target="_blank">Join group</a>
+      <a class="cta secondary" href="https://api.whatsapp.com/send?text={{ ('Join ' ~ category_name(group.category) ~ ' ' ~ (group.country or '') ~ ' ' ~ (group.language or '') ~ ' Whatsapp Group Link. Follow this link : ' ~ site_url ~ '/group/find?category=' ~ group.category)|urlencode }}">Share group</a>
+    </div>
+  {% endif %}
+</article>
+
+{% if related and not reported %}
+<section class="related">
+  <h2>Related Groups</h2>
+  {% for g in related %}
+    {{ group_card(g) }}
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

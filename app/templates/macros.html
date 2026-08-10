@@ -1,0 +1,71 @@
+{% macro filter_bar(filters, action='/group/find') %}
+<form class="filters" action="{{ action }}" method="get">
+  <select name="category" aria-label="Category">
+    <option value="">Any Category</option>
+    {% for c in categories %}
+      <option value="{{ c.slug }}" {% if filters.category == c.slug %}selected{% endif %}>{{ c.name }}</option>
+    {% endfor %}
+  </select>
+  <select name="country" aria-label="Country">
+    <option value="">Any Country</option>
+    {% for country in countries %}
+      <option value="{{ country }}" {% if filters.country == country %}selected{% endif %}>{{ country }}</option>
+    {% endfor %}
+  </select>
+  <select name="language" aria-label="Language">
+    <option value="">Any Language</option>
+    {% for language in languages %}
+      <option value="{{ language }}" {% if filters.language == language %}selected{% endif %}>{{ language }}</option>
+    {% endfor %}
+  </select>
+  {% if filters.q %}<input type="hidden" name="q" value="{{ filters.q }}" />{% endif %}
+  <button type="submit">Find group</button>
+</form>
+{% endmacro %}
+
+{% macro group_card(group) %}
+<article class="group-card">
+  <div class="group-card-main">
+    {% if group.image %}
+      <img src="{{ group.image }}" alt="{{ group.name }} group icon" width="56" height="56" loading="lazy" />
+    {% else %}
+      <div class="avatar-fallback" aria-hidden="true">WA</div>
+    {% endif %}
+    <div>
+      <h2><a href="/group/{{ group.slug }}">{{ group.name }}</a></h2>
+      <p class="meta">
+        <span>{{ category_name(group.category) }}</span>
+        {% if group.country %}<span>{{ group.country }}</span>{% endif %}
+        {% if group.language %}<span>{{ group.language }}</span>{% endif %}
+      </p>
+    </div>
+  </div>
+  {% if group.description %}
+    <p class="desc">{{ group.description }}</p>
+  {% endif %}
+  {% if group.tags %}
+    <ul class="tags">
+      {% for tag in group.tags %}
+        <li>{{ tag }}</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+  <div class="card-actions">
+    <a class="join" href="/group/{{ group.slug }}">View group</a>
+  </div>
+</article>
+{% endmacro %}
+
+{% macro pager(pager, base_path, query_string='') %}
+{% if pager.pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% if pager.has_prev %}
+    <a href="{{ base_path }}?{% if query_string %}{{ query_string }}&{% endif %}page={{ pager.prev_page }}">Previous</a>
+  {% endif %}
+  <span>Page {{ pager.page }} of {{ pager.pages }}</span>
+  {% if pager.has_next %}
+    <a href="{{ base_path }}?{% if query_string %}{{ query_string }}&{% endif %}page={{ pager.next_page }}">Next</a>
+  {% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
