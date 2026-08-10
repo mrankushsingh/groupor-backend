@@ -1,7 +1,6 @@
 from functools import lru_cache
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # asyncpg / SQLAlchemy do not understand every libpq query flag Railway may add.
