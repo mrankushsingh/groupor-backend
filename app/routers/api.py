@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import asyncio
+import secrets
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
 from app.catalog import category_name
+from app.config import get_settings
 from app.db import get_db
-from app.seo import absolute_url, group_path, group_seo
+from app.seo import absolute_url, group_path, group_seo, invite_code_of
 from app.services import (
     create_group,
     get_group_by_slug,
@@ -18,6 +21,7 @@ from app.services import (
     record_ip_quota,
     submit_group_report,
 )
+from app.whatsapp_preview import fetch_whatsapp_preview
 
 router = APIRouter(prefix="/api", tags=["api"])
 settings = get_settings()
@@ -55,6 +59,37 @@ class GroupCreateIn(BaseModel):
     language: str = Field(default="", max_length=80)
     tags: str = Field(default="", max_length=500)
     image: str | None = Field(default=None, max_length=1000)
+    # When true (default), fetch WhatsApp OG name/photo like the manual form.
+    fetch_preview: bool = True
+
+
+class BulkGroupItem(BaseModel):
+    link: str = Field(min_length=10, max_length=300)
+    name: str = Field(default="", max_length=80)
+    description: str = Field(default="", max_length=6000)
+    category: str = Field(default="all", max_length=80)
+    country: str = Field(default="India", max_length=80)
+    language: str = Field(default="", max_length=80)
+    tags: str = Field(default="", max_length=500)
+    image: str | None = Field(default=None, max_length=1000)
+
+
+class BulkCreateIn(BaseModel):
+    groups: list[BulkGroupItem] = Field(min_length=1, max_length=50)
+    fetch_preview: bool = True
+    # Delay between WhatsApp scrapes so bulk imports are less likely to get blocked.
+    delay_seconds: float = Field(default=0.6, ge=0, le=5)
+
+
+class PreviewIn(BaseModel):
+    link: str = Field(min_length=10, max_length=300)
+
+
+class ReportCreateIn(BaseModel):
+    group_id: str = Field(min_length=1, max_length=64)
+    invite_code: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    reason: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
 
 
 def serialize_group(group) -> dict:
@@ -89,30 +124,45 @@ def client_ip(request: Request) -> str:
     return "unknown"
 
 
-class ReportCreateIn(BaseModel):
-    group_id: str = Field(min_length=1, max_length=64)
-    invite_code: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
-    reason: str = Field(min_length=1, max_length=64)
-    description: str = Field(min_length=1, max_length=500)
+def has_bulk_key(x_api_key: str | None) -> bool:
+    expected = (settings.bulk_api_key or "").strip()
+    if not expected or not x_api_key:
+        return False
+    return secrets.compare_digest(expected, x_api_key.strip())
 
 
-class BulkGroupsIn(BaseModel):
-    groups: list[GroupCreateIn] = Field(min_length=1, max_length=1000)
-
-
-def require_admin(request: Request) -> None:
-    expected = (settings.admin_api_key or "").strip()
-    if not expected:
+def require_bulk_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
+    if not has_bulk_key(x_api_key):
         raise HTTPException(
-            status_code=503,
-            detail="ADMIN_API_KEY is not configured on the server.",
+            status_code=401,
+            detail="Valid X-API-Key required. Set BULK_API_KEY on Railway and send it as X-API-Key.",
         )
-    provided = (
-        request.headers.get("x-admin-key")
-        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-    )
-    if not provided or provided != expected:
-        raise HTTPException(status_code=401, detail="Invalid admin key.")
+
+
+async def enrich_from_whatsapp(
+    *,
+    link: str,
+    name: str,
+    image: str | None,
+    description: str,
+    fetch_preview: bool,
+) -> tuple[str, str | None, str, dict | None]:
+    """Fill missing name/image/description from WhatsApp OG tags."""
+    preview = None
+    needs_fetch = fetch_preview and (not name.strip() or not (image or "").strip())
+    if needs_fetch:
+        preview = await fetch_whatsapp_preview(link)
+        if preview.get("ok"):
+            if not name.strip():
+                name = str(preview.get("name") or "")
+            if not (image or "").strip():
+                image = str(preview.get("image") or "") or None
+            if not description.strip() and preview.get("description"):
+                description = str(preview["description"])
+    if not name.strip():
+        code = invite_code_of(link) or "group"
+        name = f"WhatsApp Group {code[:8]}"
+    return name, image, description, preview
 
 
 @router.get("/groups")
@@ -154,93 +204,119 @@ async def api_get_group(slug: str, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.post("/preview")
+async def api_preview_group(body: PreviewIn):
+    """Fetch WhatsApp invite name + photo (same as manual add-group)."""
+    preview = await fetch_whatsapp_preview(body.link)
+    return preview
+
+
 @router.post("/groups")
 async def api_create_group(
     request: Request,
     body: GroupCreateIn,
     db: AsyncSession = Depends(get_db),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
 ):
     ip = client_ip(request)
-    ok, message = await peek_ip_quota(db, ip, "upload")
-    if not ok:
-        raise HTTPException(status_code=429, detail=message)
+    bypass_quota = has_bulk_key(x_api_key)
+    if not bypass_quota:
+        ok, message = await peek_ip_quota(db, ip, "upload")
+        if not ok:
+            raise HTTPException(status_code=429, detail=message)
 
+    name, image, description, preview = await enrich_from_whatsapp(
+        link=body.link,
+        name=body.name,
+        image=body.image,
+        description=body.description,
+        fetch_preview=body.fetch_preview,
+    )
     tag_list = [t.strip() for t in body.tags.split(",") if t.strip()][:10]
-    name = body.name.strip() or "WhatsApp Group"
+
     try:
         group = await create_group(
             db,
             name=name,
             link=body.link,
-            description=body.description,
+            description=description,
             category=body.category or "all",
             country=body.country,
             language=body.language,
             tags=tag_list or None,
-            image=body.image,
+            image=image,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    await record_ip_quota(db, ip, "upload")
+    if not bypass_quota:
+        await record_ip_quota(db, ip, "upload")
+
     return {
         "ok": True,
         "group": serialize_group(group),
         "code": group.invite_code,
         "path": group_path(group.slug),
         "slug": group.slug,
+        "preview": preview,
     }
 
 
 @router.post("/groups/bulk")
 async def api_bulk_create_groups(
-    request: Request,
-    body: BulkGroupsIn,
+    body: BulkCreateIn,
     db: AsyncSession = Depends(get_db),
+    _: None = Depends(require_bulk_key),
 ):
-    """Admin-only bulk import (bypasses the public 5/day IP limit). Max 1000 per request."""
-    require_admin(request)
-
+    """
+    Import many groups (max 50 per request). Auto-fetches WhatsApp name/photo
+    like the manual form. Requires X-API-Key = BULK_API_KEY.
+    """
     created: list[dict] = []
-    skipped: list[dict] = []
-    errors: list[dict] = []
+    failed: list[dict] = []
 
     for index, item in enumerate(body.groups):
+        if index > 0 and body.fetch_preview and body.delay_seconds > 0:
+            await asyncio.sleep(body.delay_seconds)
+
+        name, image, description, preview = await enrich_from_whatsapp(
+            link=item.link,
+            name=item.name,
+            image=item.image,
+            description=item.description,
+            fetch_preview=body.fetch_preview,
+        )
         tag_list = [t.strip() for t in item.tags.split(",") if t.strip()][:10]
-        name = item.name.strip() or "WhatsApp Group"
         try:
             group = await create_group(
                 db,
                 name=name,
                 link=item.link,
-                description=item.description,
+                description=description,
                 category=item.category or "all",
-                country=item.country,
+                country=item.country or "India",
                 language=item.language,
                 tags=tag_list or None,
-                image=item.image,
+                image=image,
             )
             created.append(
                 {
-                    "index": index,
-                    "id": group.id,
-                    "slug": group.slug,
-                    "invite_code": group.invite_code,
-                    "path": group_path(group.slug),
+                    "link": item.link,
+                    "group": serialize_group(group),
+                    "preview_ok": bool(preview and preview.get("ok")),
                 }
             )
         except ValueError as exc:
-            message = str(exc)
-            bucket = skipped if "already listed" in message.lower() or "reported" in message.lower() else errors
-            bucket.append({"index": index, "link": item.link, "message": message})
+            failed.append({"link": item.link, "error": str(exc)})
+        except Exception as exc:  # noqa: BLE001
+            failed.append({"link": item.link, "error": f"{type(exc).__name__}: {exc}"})
 
     return {
         "ok": True,
-        "total": len(body.groups),
         "created": len(created),
-        "skipped": len(skipped),
-        "failed": len(errors),
-        "results": {"created": created, "skipped": skipped, "errors": errors},
+        "failed": len(failed),
+        "results": created,
+        "errors": failed,
     }
 
 

@@ -52,7 +52,34 @@ Copy `backend/.env.example` to `backend/.env` and adjust.
 | `SITE_URL` | Canonical origin, e.g. `https://groupor.link` |
 | `SITE_NAME` | Brand in titles |
 | `SESSION_SECRET` | Future signed cookies / CSRF |
+| `BULK_API_KEY` | Secret for bulk import (`X-API-Key` header) |
 | `REDIS_URL` | Optional — leave empty for now |
+
+## Bulk import (1000+ groups)
+
+Works like the manual form: for each invite link the API fetches WhatsApp **name + photo**.
+
+1. On Railway set `BULK_API_KEY` to a long random secret.
+2. Create `links.txt` with one `https://chat.whatsapp.com/...` link per line.
+3. From your PC:
+
+```bash
+cd backend
+python scripts/bulk_import_groups.py \
+  --api https://YOUR-SERVICE.up.railway.app \
+  --key YOUR_BULK_API_KEY \
+  --file links.txt \
+  --country India \
+  --category social-friendship-community
+```
+
+API (also in `/api/docs`):
+
+- `POST /api/preview` — `{ "link": "https://chat.whatsapp.com/..." }` → name/image
+- `POST /api/groups` — create one group (auto-fetches preview). With `X-API-Key` skips the 5/day limit.
+- `POST /api/groups/bulk` — up to 50 links per request (requires `X-API-Key`)
+
+For 1000 links the script sends batches of 25 and pauses between WhatsApp scrapes so invites are less likely to get blocked.
 
 ## SEO
 
