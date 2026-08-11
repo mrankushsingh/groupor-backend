@@ -10,10 +10,12 @@ from app.seo import absolute_url, group_path, group_seo
 from app.services import (
     create_group,
     get_group_by_slug,
+    get_reported_snapshot,
     list_groups,
     pagination_meta,
     peek_ip_quota,
     record_ip_quota,
+    submit_group_report,
 )
 
 router = APIRouter(prefix="/api", tags=["api"])
@@ -83,6 +85,13 @@ def client_ip(request: Request) -> str:
     if request.client:
         return request.client.host
     return "unknown"
+
+
+class ReportCreateIn(BaseModel):
+    group_id: str = Field(min_length=1, max_length=64)
+    invite_code: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    reason: str = Field(min_length=1, max_length=64)
+    description: str = Field(min_length=1, max_length=500)
 
 
 @router.get("/groups")
@@ -159,4 +168,48 @@ async def api_create_group(
         "code": group.invite_code,
         "path": group_path(group.slug),
         "slug": group.slug,
+    }
+
+
+@router.get("/reports")
+async def api_list_reports(db: AsyncSession = Depends(get_db)):
+    snapshot = await get_reported_snapshot(db)
+    return {"ok": True, **snapshot}
+
+
+@router.post("/reports")
+async def api_create_report(
+    request: Request,
+    body: ReportCreateIn,
+    db: AsyncSession = Depends(get_db),
+):
+    ip = client_ip(request)
+    ok, message = await peek_ip_quota(db, ip, "report")
+    if not ok:
+        raise HTTPException(status_code=429, detail=message)
+
+    try:
+        result = await submit_group_report(
+            db,
+            group_id=body.group_id,
+            invite_code=body.invite_code,
+            reason=body.reason,
+            description=body.description,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await record_ip_quota(db, ip, "report")
+    return {
+        "ok": True,
+        "already": result["already"],
+        "invite_code": result["invite_code"],
+        "group_id": result["group_id"],
+        "ids": result["snapshot"]["ids"],
+        "codes": result["snapshot"]["codes"],
+        "message": (
+            "This group was already reported. It stays removed for everyone."
+            if result["already"]
+            else "Thanks — the group was reported and removed for all visitors."
+        ),
     }

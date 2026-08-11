@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Group, IpRateLimit
+from app.models import Group, IpRateLimit, Report
 from app.seo import invite_code_of, slugify
 
 WINDOW = timedelta(hours=24)
@@ -90,7 +90,13 @@ async def create_group(
 
     existing = await session.scalar(select(Group).where(Group.invite_code == code))
     if existing:
+        if existing.status == "reported":
+            raise ValueError("This group link was reported and removed. It cannot be submitted again.")
         raise ValueError("This group is already listed.")
+
+    reported = await session.scalar(select(Report.id).where(Report.invite_code == code).limit(1))
+    if reported:
+        raise ValueError("This group link was reported and removed. It cannot be submitted again.")
 
     group = Group(
         slug=await unique_slug(session, name),
@@ -129,6 +135,69 @@ async def peek_ip_quota(session: AsyncSession, ip: str, kind: str) -> tuple[bool
 async def record_ip_quota(session: AsyncSession, ip: str, kind: str) -> None:
     session.add(IpRateLimit(ip=ip, kind=kind))
     await session.commit()
+
+
+async def get_reported_snapshot(session: AsyncSession) -> dict[str, list[str]]:
+    report_rows = (await session.scalars(select(Report))).all()
+    reported_groups = (
+        await session.scalars(select(Group).where(Group.status == "reported"))
+    ).all()
+
+    codes = {
+        *(str(r.invite_code).strip().lower() for r in report_rows if r.invite_code),
+        *(str(g.invite_code).strip().lower() for g in reported_groups if g.invite_code),
+    }
+    ids = {
+        *(str(r.group_id) for r in report_rows if r.group_id),
+        *(str(g.id) for g in reported_groups),
+    }
+    return {"ids": sorted(ids), "codes": sorted(c for c in codes if c)}
+
+
+async def submit_group_report(
+    session: AsyncSession,
+    *,
+    group_id: str,
+    invite_code: str,
+    reason: str,
+    description: str,
+) -> dict:
+    code = (invite_code or "").strip().lower()
+    if not code:
+        raise ValueError("Invalid invite code.")
+
+    already = await session.scalar(select(Report.id).where(Report.invite_code == code).limit(1))
+
+    group = await session.scalar(select(Group).where(Group.invite_code == code))
+    numeric_id = 0
+    if group:
+        numeric_id = int(group.id)
+        group.status = "reported"
+    else:
+        try:
+            numeric_id = int(str(group_id))
+        except ValueError:
+            # Frontend demo ids like "u123" — still store a report row.
+            digits = "".join(ch for ch in str(group_id) if ch.isdigit())
+            numeric_id = int(digits) % 2_147_483_647 if digits else 0
+
+    session.add(
+        Report(
+            group_id=numeric_id,
+            invite_code=code,
+            reason=(reason or "").strip()[:64],
+            description=(description or "").strip()[:500],
+        )
+    )
+    await session.commit()
+
+    snapshot = await get_reported_snapshot(session)
+    return {
+        "already": bool(already),
+        "invite_code": code,
+        "group_id": str(group.id if group else group_id),
+        "snapshot": snapshot,
+    }
 
 
 def pagination_meta(total: int, page: int, page_size: int) -> dict:
