@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     site_url: str = "http://localhost:8000"
     site_name: str = "Groupor"
     session_secret: str = "dev-only-change-me"
+    # Shared secret for bulk import: header X-Admin-Key / Authorization: Bearer …
+    admin_api_key: str = ""
     page_size: int = 10
     cors_origins: str = "http://localhost:8080,http://localhost:8081,http://localhost:3000"
     redis_url: str = ""

@@ -1,0 +1,20 @@
+[
+  {
+    "link": "https://chat.whatsapp.com/REPLACE_WITH_REAL_CODE_1",
+    "name": "Example Jobs Group",
+    "description": "Sample description",
+    "category": "jobs-career",
+    "country": "India",
+    "language": "Hindi",
+    "tags": "jobs,career"
+  },
+  {
+    "link": "https://chat.whatsapp.com/REPLACE_WITH_REAL_CODE_2",
+    "name": "Example Study Group",
+    "description": "Sample description",
+    "category": "education-school",
+    "country": "India",
+    "language": "English",
+    "tags": "study,exam"
+  }
+]

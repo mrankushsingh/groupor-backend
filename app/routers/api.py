@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.catalog import category_name
 from app.db import get_db
 from app.seo import absolute_url, group_path, group_seo
@@ -19,6 +20,7 @@ from app.services import (
 )
 
 router = APIRouter(prefix="/api", tags=["api"])
+settings = get_settings()
 
 
 class GroupOut(BaseModel):
@@ -92,6 +94,25 @@ class ReportCreateIn(BaseModel):
     invite_code: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
     reason: str = Field(min_length=1, max_length=64)
     description: str = Field(min_length=1, max_length=500)
+
+
+class BulkGroupsIn(BaseModel):
+    groups: list[GroupCreateIn] = Field(min_length=1, max_length=1000)
+
+
+def require_admin(request: Request) -> None:
+    expected = (settings.admin_api_key or "").strip()
+    if not expected:
+        raise HTTPException(
+            status_code=503,
+            detail="ADMIN_API_KEY is not configured on the server.",
+        )
+    provided = (
+        request.headers.get("x-admin-key")
+        or (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+    )
+    if not provided or provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid admin key.")
 
 
 @router.get("/groups")
@@ -168,6 +189,58 @@ async def api_create_group(
         "code": group.invite_code,
         "path": group_path(group.slug),
         "slug": group.slug,
+    }
+
+
+@router.post("/groups/bulk")
+async def api_bulk_create_groups(
+    request: Request,
+    body: BulkGroupsIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin-only bulk import (bypasses the public 5/day IP limit). Max 1000 per request."""
+    require_admin(request)
+
+    created: list[dict] = []
+    skipped: list[dict] = []
+    errors: list[dict] = []
+
+    for index, item in enumerate(body.groups):
+        tag_list = [t.strip() for t in item.tags.split(",") if t.strip()][:10]
+        name = item.name.strip() or "WhatsApp Group"
+        try:
+            group = await create_group(
+                db,
+                name=name,
+                link=item.link,
+                description=item.description,
+                category=item.category or "all",
+                country=item.country,
+                language=item.language,
+                tags=tag_list or None,
+                image=item.image,
+            )
+            created.append(
+                {
+                    "index": index,
+                    "id": group.id,
+                    "slug": group.slug,
+                    "invite_code": group.invite_code,
+                    "path": group_path(group.slug),
+                }
+            )
+        except ValueError as exc:
+            message = str(exc)
+            bucket = skipped if "already listed" in message.lower() or "reported" in message.lower() else errors
+            bucket.append({"index": index, "link": item.link, "message": message})
+
+    return {
+        "ok": True,
+        "total": len(body.groups),
+        "created": len(created),
+        "skipped": len(skipped),
+        "failed": len(errors),
+        "results": {"created": created, "skipped": skipped, "errors": errors},
     }
 
 
