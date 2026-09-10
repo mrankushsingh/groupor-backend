@@ -172,7 +172,7 @@ async def api_list_groups(
     language: str = "",
     q: str = "",
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=50),
+    page_size: int = Query(10, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
 ):
     groups, total = await list_groups(
