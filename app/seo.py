@@ -25,7 +25,7 @@ def invite_code_of(link: str) -> str:
     if not re.match(r"^https?://", value, re.I):
         value = "https://" + value
     m = re.search(r"chat\.whatsapp\.com/(?:invite/)?([A-Za-z0-9_-]+)", value, re.I)
-    return (m.group(1) if m else "").lower()
+    return m.group(1) if m else ""
 
 
 def canonical_invite(link: str) -> str:

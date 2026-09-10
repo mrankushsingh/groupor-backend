@@ -88,13 +88,19 @@ async def create_group(
     if not code:
         raise ValueError("Only valid chat.whatsapp.com invite links are supported.")
 
-    existing = await session.scalar(select(Group).where(Group.invite_code == code))
+    code_lower = code.lower()
+
+    existing = await session.scalar(
+        select(Group).where(func.lower(Group.invite_code) == code_lower)
+    )
     if existing:
         if existing.status == "reported":
             raise ValueError("This group link was reported and removed. It cannot be submitted again.")
         raise ValueError("This group is already listed.")
 
-    reported = await session.scalar(select(Report.id).where(Report.invite_code == code).limit(1))
+    reported = await session.scalar(
+        select(Report.id).where(func.lower(Report.invite_code) == code_lower).limit(1)
+    )
     if reported:
         raise ValueError("This group link was reported and removed. It cannot be submitted again.")
 
@@ -162,13 +168,19 @@ async def submit_group_report(
     reason: str,
     description: str,
 ) -> dict:
-    code = (invite_code or "").strip().lower()
-    if not code:
+    raw_code = (invite_code or "").strip()
+    if not raw_code:
         raise ValueError("Invalid invite code.")
 
-    already = await session.scalar(select(Report.id).where(Report.invite_code == code).limit(1))
+    code_lower = raw_code.lower()
 
-    group = await session.scalar(select(Group).where(Group.invite_code == code))
+    already = await session.scalar(
+        select(Report.id).where(func.lower(Report.invite_code) == code_lower).limit(1)
+    )
+
+    group = await session.scalar(
+        select(Group).where(func.lower(Group.invite_code) == code_lower)
+    )
     numeric_id = 0
     if group:
         numeric_id = int(group.id)
@@ -181,10 +193,12 @@ async def submit_group_report(
             digits = "".join(ch for ch in str(group_id) if ch.isdigit())
             numeric_id = int(digits) % 2_147_483_647 if digits else 0
 
+    code_to_store = group.invite_code if group else raw_code
+
     session.add(
         Report(
             group_id=numeric_id,
-            invite_code=code,
+            invite_code=code_to_store,
             reason=(reason or "").strip()[:64],
             description=(description or "").strip()[:500],
         )
@@ -194,7 +208,7 @@ async def submit_group_report(
     snapshot = await get_reported_snapshot(session)
     return {
         "already": bool(already),
-        "invite_code": code,
+        "invite_code": code_to_store,
         "group_id": str(group.id if group else group_id),
         "snapshot": snapshot,
     }
