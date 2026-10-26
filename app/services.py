@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, func, select
@@ -7,6 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Group, IpRateLimit, Report
 from app.seo import invite_code_of, slugify
+
+BANNED_REGEX = re.compile(
+    r"\b(porn|xxx|nude|nudes|sexy|sex|nsfw|erotic|hentai|boobs|penis|vagina|escort|call\s*girl|onlyfans|leak\s*data|mega\s*files?|mega\s*links?|bhabhi|aunty\s*💦)\b"
+    r"|(سكس|نودز|شرموطة|قحبة|نيك|طيز|مولع\s*نار)"
+    r"|(\b03\d{9}\b)"
+    r"|(\b(carding|dumps|bin\s*bypass|otp\s*bot|hacking\s*tool)\b)",
+    re.IGNORECASE,
+)
 
 WINDOW = timedelta(hours=24)
 LIMIT = 5
@@ -103,6 +110,12 @@ async def create_group(
     )
     if reported:
         raise ValueError("This group link was reported and removed. It cannot be submitted again.")
+
+    combined_content = f"{name} {description} {' '.join(tags or [])}"
+    if BANNED_REGEX.search(combined_content):
+        raise ValueError(
+            "This group contains terms that violate Groupor Trust & Safety Policy and cannot be listed."
+        )
 
     group = Group(
         slug=await unique_slug(session, name),

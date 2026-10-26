@@ -1,107 +1,124 @@
-# FastAPI + PostgreSQL SSR (production architecture)
+# Groupor Backend — FastAPI & PostgreSQL Community Service
 
-Dynamic server-rendered Groupor pages. Group HTML is generated from PostgreSQL on request — no static HTML file per group.
+[![Live Site](https://img.shields.io/badge/Live%20Platform-groupor.link-17D292?style=flat-square)](https://www.groupor.link/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL-336791?style=flat-square&logo=postgresql&logoColor=white)](https://www.postgresql.org)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)](LICENSE)
 
-## Stack
+Groupor Backend is an asynchronous, high-throughput REST API and data service powering community indexing, invite link resolution, spam screening, rate limiting, and reporting for [Groupor](https://www.groupor.link).
 
-| Layer | Choice |
-| --- | --- |
-| Backend | FastAPI |
-| Database | PostgreSQL |
-| Pages | Jinja2 SSR |
-| Cache | In-process TTL + `Cache-Control` headers (Redis-ready seam) |
+Built with **FastAPI**, **SQLAlchemy (asyncpg)**, and **PostgreSQL**, deployed with Docker on **Railway**.
 
-## URLs
+---
 
-- `/` — home listing (paginated)
-- `/group/find` — filtered search (paginated)
-- `/group/{slug}` — group detail with SEO title/description/canonical/OG/JSON-LD
-- `/group/addgroup` — submit form
-- `/sitemap.xml` — indexable active groups
-- `/robots.txt`
-- `/healthz`
+## Architecture & Technology Stack
 
-## Quick start
+| Layer | Component | Description |
+|:---|:---|:---|
+| **API Framework** | FastAPI (ASGI / Uvicorn) | Asynchronous REST API with automatic OpenAPI validation |
+| **Database** | PostgreSQL | Relational storage for groups, reports, rate limits, and audit logs |
+| **ORM / Query Engine** | SQLAlchemy 2.0 (asyncio) | High-performance non-blocking query execution |
+| **Moderation Engine** | Automated Trust & Safety | Keyword regex filters, phone spam detection, and quarantine pipelines |
+| **Link Scraping** | Open Graph WhatsApp Scraper | Automated WhatsApp group title and avatar extraction |
+| **Deployment** | Docker & Railway | Containerized deployment with automated health checks (`/healthz`) |
+
+---
+
+## Core API Endpoints
+
+Interactive Swagger documentation is available locally at `/api/docs`.
+
+### Public Directory Endpoints
+- `GET /healthz` — Service healthcheck, PostgreSQL connectivity status, and memory cache diagnostics.
+- `GET /api/groups` — Paginated directory listings with category, country, language, and search query filters.
+- `GET /api/groups/{slug}` — Retrieve group metadata, OG tags, canonical URLs, and JSON-LD structured data.
+- `GET /api/reports` — Fetch list of confirmed reported invite codes to synchronize frontend removal cache.
+
+### Submission & Moderation Endpoints
+- `POST /api/preview` — Scrapes and verifies public WhatsApp invite link metadata (title and thumbnail).
+- `POST /api/groups` — Submits a single WhatsApp group link (enforces 5 submissions / 24hr IP rate-limit and Trust & Safety spam filters).
+- `POST /api/groups/bulk` — Batch ingestion of up to 50 links per request (requires `X-API-Key`).
+- `POST /api/reports` — Submits a user report against malicious, inactive, or abusive group invite codes.
+
+---
+
+## Quickstart & Local Setup
+
+### Prerequisites
+- Python 3.11+
+- PostgreSQL database instance
+- Docker (optional)
+
+### Option A: Local Python Environment
+
+1. **Clone the repository:**
+   ```bash
+   git clone https://github.com/mrankushsingh/groupor-backend.git
+   cd groupor-backend
+   ```
+
+2. **Create and activate a virtual environment:**
+   For Windows:
+   ```powershell
+   .venv\Scripts\activate
+   ```
+   For Linux/macOS:
+   ```bash
+   source .venv/bin/activate
+   ```
+
+3. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Configure environment variables:**
+   ```bash
+   cp .env.example .env
+   ```
+   Edit `.env` to configure your PostgreSQL credentials:
+   ```env
+   DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5432/groupor
+   SITE_URL=https://www.groupor.link
+   SITE_NAME=Groupor
+   BULK_API_KEY=your-secure-random-key
+   ```
+
+5. **Start the API server:**
+   ```bash
+   uvicorn app.main:app --reload --port 8000
+   ```
+   Access the API at [http://localhost:8000](http://localhost:8000) and API docs at [http://localhost:8000/api/docs](http://localhost:8000/api/docs).
+
+### Option B: Docker Compose
 
 ```bash
-# from repo root
 docker compose up --build
 ```
 
-App: http://localhost:8000
+---
 
-### Local without Docker (API only)
+## Bulk Import Workflow
 
-1. Start Postgres and set `DATABASE_URL`.
-2. From `backend/`:
-
+To seed or backfill verified WhatsApp communities:
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
-
-Copy `backend/.env.example` to `backend/.env` and adjust.
-
-## Environment
-
-| Variable | Purpose |
-| --- | --- |
-| `DATABASE_URL` | `postgresql+asyncpg://...` |
-| `SITE_URL` | Canonical origin, e.g. `https://groupor.link` |
-| `SITE_NAME` | Brand in titles |
-| `SESSION_SECRET` | Future signed cookies / CSRF |
-| `BULK_API_KEY` | Secret for bulk import (`X-API-Key` header) |
-| `REDIS_URL` | Optional — leave empty for now |
-
-## Bulk import (1000+ groups)
-
-Works like the manual form: for each invite link the API fetches WhatsApp **name + photo**.
-
-1. On Railway set `BULK_API_KEY` to a long random secret.
-2. Create `links.txt` with one `https://chat.whatsapp.com/...` link per line.
-3. From your PC:
-
-```bash
-cd backend
 python scripts/bulk_import_groups.py \
-  --api https://YOUR-SERVICE.up.railway.app \
+  --api https://your-backend.up.railway.app \
   --key YOUR_BULK_API_KEY \
   --file links.txt \
   --country India \
   --category social-friendship-community
 ```
 
-API (also in `/api/docs`):
+---
 
-- `POST /api/preview` — `{ "link": "https://chat.whatsapp.com/..." }` → name/image
-- `POST /api/groups` — create one group (auto-fetches preview). With `X-API-Key` skips the 5/day limit.
-- `POST /api/groups/bulk` — up to 50 links per request (requires `X-API-Key`)
+## Contributing
 
-For 1000 links the script sends batches of 25 and pauses between WhatsApp scrapes so invites are less likely to get blocked.
+Please review [CONTRIBUTING.md](CONTRIBUTING.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before submitting pull requests.
 
-## SEO
+---
 
-Each `/group/{slug}` response includes:
+## License
 
-- HTML body with name, description, category, country, language, tags
-- `<title>`, meta description, canonical
-- Open Graph tags
-- `application/ld+json` WebPage + BreadcrumbList
-- `Cache-Control: public, max-age=120, stale-while-revalidate=600`
-
-Sitemap lists active group URLs dynamically from Postgres.
-
-## Redis later
-
-`app/cache.py` exposes `build_cache(redis_url)`. Call sites use `request.app.state.cache`. When traffic needs it, implement `RedisCache` behind the same protocol — no page rewrite required.
-
-## Deploy (Vercel + Railway)
-
-See **[DEPLOY.md](../DEPLOY.md)** at the repo root.
-
-- **Frontend** → Vercel (`vercel.json`, Nitro preset `vercel`)
-- **Backend + Postgres** → Railway (`backend/Dockerfile`, `backend/railway.toml`)
-- Set `VITE_API_URL` on Vercel to the Railway public URL
-- Set `CORS_ORIGINS` on Railway to the Vercel domain
+This project is licensed under the [MIT License](LICENSE).
