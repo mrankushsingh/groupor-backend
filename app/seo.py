@@ -63,6 +63,7 @@ def group_seo(group) -> dict:
         )
     desc = desc[:160]
     url = absolute_url(group_path(group.slug))
+    is_adult = group.category == "adult"
     return {
         "title": title,
         "description": desc,
@@ -72,11 +73,13 @@ def group_seo(group) -> dict:
         "og_url": url,
         "og_image": group.image or absolute_url("/static/og-default.png"),
         "og_type": "website",
+        "is_adult": is_adult,
     }
 
 
 def group_jsonld(group) -> dict:
     seo = group_seo(group)
+    is_adult = group.category == "adult"
     return {
         "@context": "https://schema.org",
         "@graph": [
@@ -85,6 +88,8 @@ def group_jsonld(group) -> dict:
                 "name": seo["title"],
                 "description": seo["description"],
                 "url": seo["canonical"],
+                "isFamilyFriendly": not is_adult,
+                **({"contentRating": "18+"} if is_adult else {}),
                 **({"primaryImageOfPage": group.image} if group.image else {}),
             },
             {
