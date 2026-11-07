@@ -7,11 +7,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Group, IpRateLimit, Report
 from app.seo import invite_code_of, slugify
 
-BANNED_REGEX = re.compile(
-    r"\b(porn|xxx|nude|nudes|sexy|sex|nsfw|erotic|hentai|boobs|penis|vagina|escort|call\s*girl|onlyfans|leak\s*data|mega\s*files?|mega\s*links?|bhabhi|aunty\s*💦)\b"
-    r"|(سكس|نودز|شرموطة|قحبة|نيك|طيز|مولع\s*نار)"
-    r"|(\b03\d{9}\b)"
-    r"|(\b(carding|dumps|bin\s*bypass|otp\s*bot|hacking\s*tool)\b)",
+ILLEGAL_REGEX = re.compile(
+    r"(\b(carding|dumps|bin\s*bypass|otp\s*bot|hacking\s*tool)\b)"
+    r"|(\b(leak\s*data|mega\s*files?|mega\s*links?)\b)"
+    r"|(\b(csam|cp\b|child\s*porn|pedophil|underage|teen\s*porn)\b)"
+    r"|(\b03\d{9}\b)",
+    re.IGNORECASE,
+)
+
+ADULT_REGEX = re.compile(
+    r"\b(porn|xxx|nude|nudes|sexy|sex|nsfw|erotic|hentai|boobs|penis|vagina|escort|call\s*girl|onlyfans|bhabhi|aunty\s*💦)\b"
+    r"|(سكس|نودز|شرموطة|قحبة|نيك|طيز|مولع\s*نار)",
     re.IGNORECASE,
 )
 
@@ -41,6 +47,9 @@ async def list_groups(
     stmt = active_groups_stmt()
     if category:
         stmt = stmt.where(Group.category == category)
+    elif not q or not ADULT_REGEX.search(q):
+        stmt = stmt.where(Group.category != "adult")
+
     if country:
         stmt = stmt.where(Group.country == country)
     if language:
@@ -112,16 +121,20 @@ async def create_group(
         raise ValueError("This group link was reported and removed. It cannot be submitted again.")
 
     combined_content = f"{name} {description} {' '.join(tags or [])}"
-    if BANNED_REGEX.search(combined_content):
+    if ILLEGAL_REGEX.search(combined_content):
         raise ValueError(
             "This group contains terms that violate Groupor Trust & Safety Policy and cannot be listed."
         )
+
+    target_category = (category or "all").strip().lower()
+    if ADULT_REGEX.search(combined_content) or target_category == "adult":
+        target_category = "adult"
 
     group = Group(
         slug=await unique_slug(session, name),
         name=name.strip()[:80],
         description=(description or "").strip(),
-        category=category or "all",
+        category=target_category,
         country=(country or "").strip(),
         language=(language or "").strip(),
         tags=tags or None,
